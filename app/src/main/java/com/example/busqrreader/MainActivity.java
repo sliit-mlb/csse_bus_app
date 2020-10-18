@@ -18,6 +18,7 @@ import android.widget.Toast;
 import com.budiyev.android.codescanner.CodeScanner;
 import com.budiyev.android.codescanner.CodeScannerView;
 import com.budiyev.android.codescanner.DecodeCallback;
+import com.example.busqrreader.Common.CommonConstants;
 import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
@@ -35,25 +36,35 @@ import com.karumi.dexter.listener.single.PermissionListener;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.Random;
 
 public class MainActivity extends AppCompatActivity {
-    CodeScanner codeScanner;
-    CodeScannerView scannerView;
-    LinkList linkList;
-    private DatabaseReference mDatabase;
-    TripDetails tripDetails;
-    MediaPlayer mediaPlayer;
 
-    static boolean val;
+    private CodeScanner codeScanner;
+    private CodeScannerView scannerView;
+    private LinkList linkList;
+    private DatabaseReference mDatabase, databaseReference;
+    private TripDetails tripDetails;
+    private MediaPlayer mediaPlayer;
 
+    private static boolean val;
+    private static boolean money = false;
     private static final int TIME_INTERVAL = 2000;
+
+    private String id;
+    private double newAmount;
     private long mBackPressed;
 
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN)
 
+    /**
+     * This is onCreate for MainActivity
+     *
+     * Assign Toolbar
+     * QR Scanner implementation
+     * Balance check for particular QR
+     */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -61,7 +72,7 @@ public class MainActivity extends AppCompatActivity {
 
         Toolbar toolbar = findViewById(R.id.toolbarMain);
         toolbar.setTitleTextColor(Color.WHITE);
-        toolbar.setTitle("Bus Scanner");
+        toolbar.setTitle(CommonConstants.TOOLBAR_HEADING);
         setSupportActionBar(toolbar);
 
         linkList = new LinkList();
@@ -77,14 +88,14 @@ public class MainActivity extends AppCompatActivity {
                     @RequiresApi(api = Build.VERSION_CODES.O)
                     @Override
                     public void run() {
-                        CountDownTimer timer = new CountDownTimer(4000,4000) {
+                        CountDownTimer timer = new CountDownTimer(2000, 2000) {
                             @Override
                             public void onTick(long millisUntilFinished) {
-                                String id = result.getText();
+                                id = result.getText();
 
-                                DatabaseReference reference = FirebaseDatabase.getInstance().getReference("Passanger");
+                                DatabaseReference reference = FirebaseDatabase.getInstance().getReference(CommonConstants.COLLECTION_NAME_PASSENGER);
 
-                                Query checkInspector = reference.orderByChild("pid").equalTo(id);
+                                Query checkInspector = reference.orderByChild(CommonConstants.PASSENGER_KEY_PID).equalTo(id);
 
                                 checkInspector.addListenerForSingleValueEvent(new ValueEventListener() {
                                     @Override
@@ -92,9 +103,10 @@ public class MainActivity extends AppCompatActivity {
                                         if (dataSnapshot.exists()) {
                                             setTrue();
                                             double balance = getCurrentAmount(dataSnapshot);
-                                            if(balance<100){
-                                                Toast.makeText(getApplicationContext(),"Not enough balance",Toast.LENGTH_LONG).show();
+                                            if (balance < 100) {
+                                                Toast.makeText(getApplicationContext(), CommonConstants.TOAST_MESSAGE_NOT_ENOUGH_BALANCE, Toast.LENGTH_LONG).show();
                                                 setFalse();
+                                                setTrueForUser();
                                             }
                                         } else {
                                             setFalse();
@@ -114,7 +126,7 @@ public class MainActivity extends AppCompatActivity {
                                 if (val) {
                                     Link link = linkList.deleteLink(id);
 
-                                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern("HH:mm:ss");
+                                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern(CommonConstants.TIME_PATTERN);
                                     LocalDateTime now = LocalDateTime.now();
                                     String nowTime = dtf.format(now);
 
@@ -137,6 +149,8 @@ public class MainActivity extends AppCompatActivity {
                                             amt = getAmount();
                                         }
 
+                                        newAmount = amt;
+
                                         tripDetails = new TripDetails();
 
                                         tripDetails.setPid(link.id);
@@ -147,14 +161,20 @@ public class MainActivity extends AppCompatActivity {
                                         tripDetails.setAmount(Double.toString(amt));
                                         tripDetails.setDate(link.date);
 
-                                        mDatabase.child("TripDetails").push().setValue(tripDetails);
+                                        mDatabase.child(CommonConstants.COLLECTION_NAME_TRIP_HISTORY).push().setValue(tripDetails);
+
+                                        updatePassanger();
 
                                         soundGoodbye();
 
                                         clearAll(tripDetails);
                                     }
                                 } else {
-                                    soundError();
+                                    if (money) {
+                                        soundErrorUser();
+                                    } else {
+                                        soundError();
+                                    }
                                 }
                             }
                         };
@@ -180,6 +200,9 @@ public class MainActivity extends AppCompatActivity {
         requestForCamera();
     }
 
+    /**
+     * This is make a request for Camera
+     */
     private void requestForCamera() {
         Dexter.withActivity(this).withPermission(Manifest.permission.CAMERA).withListener(new PermissionListener() {
             @Override
@@ -189,7 +212,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onPermissionDenied(PermissionDeniedResponse response) {
-                Toast.makeText(getApplicationContext(), "Camera Permission is Required.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(getApplicationContext(), CommonConstants.CAMERA_PERMISSION, Toast.LENGTH_SHORT).show();
             }
 
             @Override
@@ -200,31 +223,87 @@ public class MainActivity extends AppCompatActivity {
         }).check();
     }
 
-    public void clearAll(TripDetails tripDetails) {
-        tripDetails.setPid("");
-        tripDetails.setStartLocation("");
-        tripDetails.setEndLocation("");
-        tripDetails.setStartTime("");
-        tripDetails.setEndTime("");
-        tripDetails.setDate("");
-        tripDetails.setAmount("");
+    /**
+     * This method update the passenger amount
+     * <p>
+     * Passenger amount reduced by the travel cost
+     */
+    private void updatePassanger() {
+        databaseReference = FirebaseDatabase.getInstance().getReference().child(CommonConstants.COLLECTION_NAME_PASSENGER);
+
+        Query checkInspector = databaseReference.orderByChild(CommonConstants.PASSENGER_KEY_PID).equalTo(id);
+
+        checkInspector.addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                if (dataSnapshot.exists()) {
+                    String amount = null;
+                    for (DataSnapshot ds : dataSnapshot.getChildren()) {
+                        amount = ds.child(CommonConstants.PASSENGER_KEY_AMOUNT).getValue(String.class);
+                    }
+
+                    double amtInDouble = Double.parseDouble(amount);
+                    amtInDouble -= newAmount;
+
+                    databaseReference.child(id).child(CommonConstants.PASSENGER_KEY_AMOUNT).setValue(Double.toString(amtInDouble));
+                }
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError databaseError) {
+
+            }
+        });
     }
 
+    /**
+     * This method set null values for TripDetails instance
+     *
+     * @param tripDetails
+     */
+    public void clearAll(TripDetails tripDetails) {
+        tripDetails.setPid(CommonConstants.NULL_VALUE);
+        tripDetails.setStartLocation(CommonConstants.NULL_VALUE);
+        tripDetails.setEndLocation(CommonConstants.NULL_VALUE);
+        tripDetails.setStartTime(CommonConstants.NULL_VALUE);
+        tripDetails.setEndTime(CommonConstants.NULL_VALUE);
+        tripDetails.setDate(CommonConstants.NULL_VALUE);
+        tripDetails.setAmount(CommonConstants.NULL_VALUE);
+    }
+
+    /**
+     * This method play Welcome Sound
+     */
     public void soundWelcome() {
         mediaPlayer = null;
         mediaPlayer = MediaPlayer.create(this, R.raw.sound_welcome);
         mediaPlayer.start();
     }
 
+    /**
+     * This method play Goodbye Sound
+     */
     public void soundGoodbye() {
         mediaPlayer = null;
         mediaPlayer = MediaPlayer.create(this, R.raw.sound_goodbye);
         mediaPlayer.start();
     }
 
+    /**
+     * This method play Error Sound
+     */
     public void soundError() {
         mediaPlayer = null;
         mediaPlayer = MediaPlayer.create(this, R.raw.sound_error);
+        mediaPlayer.start();
+    }
+
+    /**
+     * This method play User Error Sound
+     */
+    public void soundErrorUser() {
+        mediaPlayer = null;
+        mediaPlayer = MediaPlayer.create(this, R.raw.sound_error_passenger);
         mediaPlayer.start();
     }
 
@@ -237,31 +316,42 @@ public class MainActivity extends AppCompatActivity {
             a.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(a);
         } else {
-            Toast.makeText(getBaseContext(), "Click two times to close an activity", Toast.LENGTH_SHORT).show();
+            Toast.makeText(getBaseContext(), CommonConstants.TOAST_MESSAGE_CLOSE, Toast.LENGTH_SHORT).show();
         }
         mBackPressed = System.currentTimeMillis();
     }
 
     private void setTrue() {
         val = true;
+        money = false;
     }
 
     private void setFalse() {
         val = false;
+        money = false;
     }
 
-    private double getCurrentAmount(DataSnapshot dataSnapshot){
+    private void setTrueForUser() {
+        money = true;
+    }
+
+    private double getCurrentAmount(DataSnapshot dataSnapshot) {
 
         double amt = 0.0;
 
-        for(DataSnapshot ds : dataSnapshot.getChildren()) {
-            String amount = ds.child("amount").getValue(String.class);
+        for (DataSnapshot ds : dataSnapshot.getChildren()) {
+            String amount = ds.child(CommonConstants.PASSENGER_KEY_AMOUNT).getValue(String.class);
             amt = Double.parseDouble(amount);
         }
 
         return amt;
     }
 
+    /**
+     * This is return random location
+     *
+     * @return
+     */
     private String getLocation() {
         List<String> list = new ArrayList<>();
 
@@ -290,6 +380,11 @@ public class MainActivity extends AppCompatActivity {
         return list.get(random.nextInt(list.size()));
     }
 
+    /**
+     * This is return random Amount
+     *
+     * @return
+     */
     private double getAmount() {
         List<Double> list = new ArrayList<>();
 

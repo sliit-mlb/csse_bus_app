@@ -7,7 +7,7 @@ public class Link {
     public String date;
     public Link next;
 
-    public Link(String id, String startTime, String departure, String date){
+    public Link(String id, String startTime, String departure, String date) {
         this.id = id;
         this.startTime = startTime;
         this.departure = departure;

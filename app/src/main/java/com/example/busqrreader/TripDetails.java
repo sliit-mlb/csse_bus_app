@@ -9,7 +9,8 @@ public class TripDetails {
     private String amount;
     private String date;
 
-    public TripDetails(){}
+    public TripDetails() {
+    }
 
     public String getPid() {
         return pid;
